@@ -9,7 +9,7 @@ from .types import RSGIScope
 if TYPE_CHECKING:
     import asyncio
 
-    from granian._granian import RSGIHTTPProtocol
+    from granian._granian import RSGIHTTPProtocol, RSGIWebsocketProtocol
 
 __all__ = ("App",)
 
@@ -34,11 +34,14 @@ class App:
             loop.run_until_complete(hook())
         log.info("app initialized")
 
-    async def __rsgi__(self, scope: RSGIScope, proto: "RSGIHTTPProtocol") -> None:
-        if scope.proto != "http":
-            proto.response_empty(400, [])
+    async def __rsgi__(
+        self, scope: RSGIScope, proto: "RSGIHTTPProtocol | RSGIWebsocketProtocol"
+    ) -> None:
+        if scope.proto == "ws":
+            # close before accept rejects the websocket handshake
+            proto.close(None)  # type: ignore[union-attr]
             return
-        await self.router.dispatch(scope, proto)
+        await self.router.dispatch(scope, proto)  # type: ignore[arg-type]
 
     def __rsgi_del__(self, loop: "asyncio.AbstractEventLoop") -> None:
         for hook in self.on_shutdown:

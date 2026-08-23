@@ -37,14 +37,25 @@ def test_lifespan_hooks_run_in_order_and_dispatch_works():
     assert json.loads(proto.body) == {"status": "ok"}
 
 
-def test_non_http_scope_rejected():
+class FakeWsProto:
+    """Minimal RSGIWebsocketProtocol stand-in recording close() calls."""
+
+    def __init__(self) -> None:
+        self.closed_with: list[int | None] = []
+
+    def close(self, status: int | None) -> tuple[int, bool]:
+        self.closed_with.append(status)
+        return (403, False)
+
+
+def test_ws_scope_rejected_via_close():
     app = App(Router())
     loop = asyncio.new_event_loop()
     try:
-        proto = FakeProto()
+        proto = FakeWsProto()
         loop.run_until_complete(
             app.__rsgi__(FakeScope(method="GET", path="/ws", proto="ws"), proto)  # type: ignore[arg-type]
         )
     finally:
         loop.close()
-    assert proto.status == 400
+    assert proto.closed_with == [None]
