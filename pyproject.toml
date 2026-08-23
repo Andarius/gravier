@@ -5,7 +5,7 @@ description = "Small typed wrapper around granian's RSGI interface: router, life
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
-    { email = "julien.brayere@polarsen.io" }
+    { name = "Julien Brayere", email = "julien.brayere@obitrain.com" }
 ]
 requires-python = ">=3.13"
 dependencies = [
