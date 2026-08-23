@@ -1,6 +1,6 @@
 # Gravier
 
-Small typed wrapper around [granian](https://github.com/emmett-framework/granian)'s RSGI interface: a router with msgspec validation, app lifecycle, SSE helpers, OpenAPI generation, and test utilities — no ASGI layer in between.
+Small typed wrapper around [granian](https://github.com/emmett-framework/granian)'s RSGI interface: a router with msgspec validation, app lifecycle, SSE helpers, OpenAPI generation, and test utilities.
 
 ```bash
 pip install gravier
