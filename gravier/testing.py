@@ -20,7 +20,7 @@ class FakeScope:
     scheme: str = "http"
     http_version: str = "1.1"
     server: str = "127.0.0.1:0"
-    authority: str = "127.0.0.1:0"
+    authority: str | None = "127.0.0.1:0"
     client: str = "127.0.0.1:0"
 
 
@@ -98,20 +98,31 @@ class ASGIBridge:
         self, scope: MutableMapping[str, Any], receive: Any, send: Any
     ) -> None:
         if scope["type"] == "lifespan":
-            msg = await receive()
-            if msg["type"] == "lifespan.startup":
-                await send({"type": "lifespan.startup.complete"})
-            return
+            while True:
+                msg = await receive()
+                if msg["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif msg["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
 
         request_body = b""
-        msg = await receive()
-        if msg.get("type") == "http.request":
-            request_body = msg.get("body", b"")
+        more_body = True
+        while more_body:
+            msg = await receive()
+            if msg.get("type") != "http.request":
+                break
+            request_body += msg.get("body", b"")
+            more_body = msg.get("more_body", False)
 
         rsgi_scope = FakeScope(
             method=scope["method"],
             path=scope["path"],
             query_string=(scope.get("query_string") or b"").decode(),
+            headers={
+                k.decode("latin-1"): v.decode("latin-1")
+                for k, v in scope.get("headers", [])
+            },
         )
         proto = FakeProto(request_body)
         await self.router.dispatch(rsgi_scope, proto)  # type: ignore[arg-type]

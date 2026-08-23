@@ -22,6 +22,10 @@ def client():
     async def _echo(req: Body[EchoBody]) -> dict:
         return {"echo": req.message}
 
+    @router.get("/token")
+    async def _token(scope, proto) -> dict:
+        return {"token": scope.headers.get("x-token")}
+
     @router.post("/stream")
     async def _stream(scope, proto) -> None:
         transport = proto.response_stream(200, [("content-type", "text/event-stream")])
@@ -52,3 +56,50 @@ def test_stream_collected(client):
 def test_unknown_route_404(client):
     resp = client.get("/nope")
     assert resp.status_code == 404
+
+
+def test_request_headers_propagated(client):
+    resp = client.get("/token", headers={"x-token": "secret"})
+    assert resp.json() == {"token": "secret"}
+
+
+async def test_chunked_request_body_is_concatenated():
+    router = Router()
+
+    @router.post("/echo")
+    async def _echo(req: Body[EchoBody]) -> dict:
+        return {"echo": req.message}
+
+    frames = [
+        {"type": "http.request", "body": b'{"message"', "more_body": True},
+        {"type": "http.request", "body": b': "split"}', "more_body": False},
+    ]
+    sent: list[dict] = []
+
+    async def receive():
+        return frames.pop(0)
+
+    async def send(msg):
+        sent.append(msg)
+
+    scope = {"type": "http", "method": "POST", "path": "/echo", "query_string": b""}
+    await ASGIBridge(router)(scope, receive, send)
+    assert sent[0]["status"] == 200
+    assert sent[1]["body"] == b'{"echo":"split"}'
+
+
+async def test_lifespan_shutdown_acknowledged():
+    frames = [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]
+    sent: list[dict] = []
+
+    async def receive():
+        return frames.pop(0)
+
+    async def send(msg):
+        sent.append(msg)
+
+    await ASGIBridge(Router())({"type": "lifespan"}, receive, send)
+    assert sent == [
+        {"type": "lifespan.startup.complete"},
+        {"type": "lifespan.shutdown.complete"},
+    ]
