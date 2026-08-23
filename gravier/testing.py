@@ -15,6 +15,7 @@ class FakeScope:
     path: str
     query_string: str = ""
     proto: str = "http"
+    rsgi_version: str = "1.6"
     headers: MutableMapping[str, str] = dataclasses.field(default_factory=dict)
     scheme: str = "http"
     http_version: str = "1.1"
