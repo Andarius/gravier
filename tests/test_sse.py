@@ -12,6 +12,9 @@ from gravier import sse
         pytest.param(
             "done", "raw", b"event: done\ndata: raw\n\n", id="str_passthrough"
         ),
+        pytest.param(
+            "x", "a\nb", b"event: x\ndata: a\ndata: b\n\n", id="multiline_str"
+        ),
     ],
 )
 def test_sse_format(event, data, expected):
