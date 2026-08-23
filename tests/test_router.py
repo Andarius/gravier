@@ -11,6 +11,7 @@ from gravier.testing import FakeProto, FakeScope
 class SearchQuery(msgspec.Struct):
     q: str
     limit: int = 10
+    tags: list[str] = []
 
 
 class CreateItem(msgspec.Struct):
@@ -31,7 +32,11 @@ def make_router() -> Router:
 
     @router.get("/search")
     async def _search(query: Query[SearchQuery]) -> dict:
-        return {"q": query.q, "limit": query.limit}
+        return {"q": query.q, "limit": query.limit, "tags": query.tags}
+
+    @router.get("/files/{name}.json")
+    async def _file(scope, proto, name: str) -> dict:
+        return {"name": name}
 
     @router.post("/items")
     async def _create(req: Body[CreateItem]) -> dict:
@@ -76,7 +81,7 @@ async def dispatch(
             "q=hello&limit=3",
             b"",
             200,
-            {"q": "hello", "limit": 3},
+            {"q": "hello", "limit": 3, "tags": []},
             id="query_struct_coerced",
         ),
         pytest.param(
@@ -85,8 +90,53 @@ async def dispatch(
             "q=hello",
             b"",
             200,
-            {"q": "hello", "limit": 10},
+            {"q": "hello", "limit": 10, "tags": []},
             id="query_default",
+        ),
+        pytest.param(
+            "GET",
+            "/search",
+            "q=",
+            b"",
+            200,
+            {"q": "", "limit": 10, "tags": []},
+            id="query_blank_value_kept",
+        ),
+        pytest.param(
+            "GET",
+            "/search",
+            "q=x&tags=a",
+            b"",
+            200,
+            {"q": "x", "limit": 10, "tags": ["a"]},
+            id="query_single_value_list_field",
+        ),
+        pytest.param(
+            "GET",
+            "/search",
+            "q=x&tags=a&tags=b",
+            b"",
+            200,
+            {"q": "x", "limit": 10, "tags": ["a", "b"]},
+            id="query_repeated_list_field",
+        ),
+        pytest.param(
+            "GET",
+            "/files/data.json",
+            "",
+            b"",
+            200,
+            {"name": "data"},
+            id="literal_dot_matches",
+        ),
+        pytest.param(
+            "GET",
+            "/files/dataXjson",
+            "",
+            b"",
+            404,
+            {"error": "not found"},
+            id="literal_dot_not_wildcard",
         ),
         pytest.param(
             "POST",
@@ -134,18 +184,37 @@ async def test_dispatch(method, path, query, body, expected_status, expected_bod
 
 
 @pytest.mark.parametrize(
-    "query, body, path",
+    "method, query, body, path",
     [
-        pytest.param("limit=3", b"", "/search", id="missing_required_query"),
-        pytest.param("", b'{"name": "vase"}', "/items", id="missing_body_field"),
-        pytest.param("", b'{"name": "v", "price": "x"}', "/items", id="bad_body_type"),
+        pytest.param("GET", "limit=3", b"", "/search", id="missing_required_query"),
+        pytest.param(
+            "POST", "", b'{"name": "vase"}', "/items", id="missing_body_field"
+        ),
+        pytest.param(
+            "POST", "", b'{"name": "v", "price": "x"}', "/items", id="bad_body_type"
+        ),
+        pytest.param("POST", "", b"", "/items", id="empty_body"),
+        pytest.param("POST", "", b'{"name": "v"', "/items", id="truncated_json"),
+        pytest.param("POST", "", b"not json", "/items", id="malformed_json"),
     ],
 )
-async def test_validation_errors_are_422(query, body, path):
-    method = "POST" if body else "GET"
+async def test_validation_errors_are_422(method, query, body, path):
     proto = await dispatch(make_router(), method, path, query=query, body=body)
     assert proto.status == 422
     assert "error" in json.loads(proto.body)
+
+
+@pytest.mark.parametrize(
+    "method, path, expected_allow",
+    [
+        pytest.param("DELETE", "/health", "GET", id="static"),
+        pytest.param("POST", "/items/42", "GET", id="parametric"),
+    ],
+)
+async def test_405_includes_allow_header(method, path, expected_allow):
+    proto = await dispatch(make_router(), method, path)
+    assert proto.status == 405
+    assert ("allow", expected_allow) in proto.headers
 
 
 async def test_custom_response_passthrough():

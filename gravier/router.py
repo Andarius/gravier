@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import functools
 import inspect
 import re
 import types
@@ -120,15 +121,14 @@ def _error(proto: "RSGIHTTPProtocol", status: int, message: str) -> None:
 
 # Matches {param} placeholders in route patterns like "/users/{id}"
 _PARAM_RE = re.compile(r"\{(\w+)\}")
-# Replacement that turns {param} into a named capture group
-_PARAM_GROUP_REPL = r"(?P<\1>[^/]+)"
 
 
 def _unwrap_return_type(hint: Any) -> type | None:
     """Extract a concrete return type from the handler's annotation,
     filtering out ``Response`` and ``None`` from unions.
     """
-    if hint is None or hint is inspect.Parameter.empty:
+    # get_type_hints resolves a bare `-> None` to NoneType
+    if hint is None or hint is type(None) or hint is inspect.Parameter.empty:
         return None
     origin = get_origin(hint)
     if origin is types.UnionType or origin is Union:
@@ -185,10 +185,21 @@ def _inspect_handler(handler: Handler) -> HandlerSpec:
     return spec
 
 
+@functools.cache
+def _sequence_fields(struct_type: type[msgspec.Struct]) -> frozenset[str]:
+    """Names of struct fields typed as a sequence (kept as lists when parsing)."""
+    return frozenset(
+        f.name
+        for f in msgspec.structs.fields(struct_type)
+        if get_origin(f.type) in (list, set, frozenset, tuple)
+    )
+
+
 def _parse_query(qs: str, struct_type: type[msgspec.Struct]) -> msgspec.Struct:
     """Parse a query string into a msgspec.Struct using lenient coercion."""
-    raw = parse_qs(qs)
-    flat = {k: v[0] if len(v) == 1 else v for k, v in raw.items()}
+    raw = parse_qs(qs, keep_blank_values=True)
+    seq_fields = _sequence_fields(struct_type)
+    flat = {k: v if k in seq_fields else v[-1] for k, v in raw.items()}
     return msgspec.convert(flat, struct_type, strict=False)
 
 
@@ -256,7 +267,12 @@ class Route:
     def __post_init__(self) -> None:
         self.param_names = _PARAM_RE.findall(self.pattern)
         if self.param_names:
-            regex = _PARAM_RE.sub(_PARAM_GROUP_REPL, self.pattern)
+            # split alternates static text and param names; escape the static parts
+            parts = _PARAM_RE.split(self.pattern)
+            regex = "".join(
+                f"(?P<{part}>[^/]+)" if i % 2 else re.escape(part)
+                for i, part in enumerate(parts)
+            )
             self._regex = re.compile(f"^{regex}$")
         else:
             self._regex = None
@@ -400,7 +416,8 @@ class Router:
                 else:
                     result = await handler(scope, proto)
                 self._handle_result(proto, result)
-            except msgspec.ValidationError as exc:
+            # DecodeError also covers ValidationError (its subclass)
+            except msgspec.DecodeError as exc:
                 _error(proto, HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
             except Exception:
                 log.exception("Handler error: %s %s", method, path)
@@ -408,13 +425,13 @@ class Router:
             return
 
         # Parametric routes
-        matched_wrong_method = False
+        allowed_methods: set[str] = set()
         for route in self._routes:
             params = route.match(path)
             if params is None:
                 continue
             if route.method != method:
-                matched_wrong_method = True
+                allowed_methods.add(route.method)
                 continue
             try:
                 if route.spec.has_injections:
@@ -424,21 +441,22 @@ class Router:
                 else:
                     result = await route.handler(scope, proto, **params)
                 self._handle_result(proto, result)
-            except msgspec.ValidationError as exc:
+            except msgspec.DecodeError as exc:
                 _error(proto, HTTPStatus.UNPROCESSABLE_ENTITY, str(exc))
             except Exception:
                 log.exception("Handler error: %s %s", method, path)
                 _error(proto, HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
             return
 
-        # Check if any static route matches path but wrong method
-        if not matched_wrong_method:
-            for key in self._static:
-                if key[1] == path and key[0] != method:
-                    matched_wrong_method = True
-                    break
+        # Static routes matching the path under other methods
+        allowed_methods.update(m for m, p in self._static if p == path)
 
-        if matched_wrong_method:
-            _error(proto, HTTPStatus.METHOD_NOT_ALLOWED, "method not allowed")
+        if allowed_methods:
+            raw = _encoder.encode({"error": "method not allowed"})
+            headers = [
+                ("content-type", "application/json"),
+                ("allow", ", ".join(sorted(allowed_methods))),
+            ]
+            proto.response_bytes(HTTPStatus.METHOD_NOT_ALLOWED, headers, raw)
         else:
             _error(proto, HTTPStatus.NOT_FOUND, "not found")

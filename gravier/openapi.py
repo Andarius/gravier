@@ -3,13 +3,17 @@ from typing import Any
 
 import msgspec
 
-from .router import Handler, HandlerSpec, Response, Router
+from .router import _PARAM_RE, Handler, HandlerSpec, Response, Router
 
 __all__ = ("build_openapi", "openapi_handler")
 
 
-def _schema_ref(name: str) -> dict[str, str]:
-    return {"$ref": f"#/components/schemas/{name}"}
+def _build_path_params(path: str) -> list[dict[str, Any]]:
+    """Generate required path parameters from {param} template expressions."""
+    return [
+        {"name": name, "in": "path", "required": True, "schema": {"type": "string"}}
+        for name in _PARAM_RE.findall(path)
+    ]
 
 
 def _build_query_params(spec: HandlerSpec) -> list[dict[str, Any]]:
@@ -40,37 +44,21 @@ def _build_query_params(spec: HandlerSpec) -> list[dict[str, Any]]:
     return params
 
 
-def _build_request_body(type_name: str) -> dict[str, Any]:
-    return {
-        "required": True,
-        "content": {
-            "application/json": {
-                "schema": _schema_ref(type_name),
-            }
-        },
-    }
-
-
-def _build_responses(spec: HandlerSpec) -> dict[str, Any]:
+def _build_responses(
+    spec: HandlerSpec, type_schemas: dict[int, dict[str, Any]]
+) -> dict[str, Any]:
     """Generate OpenAPI responses from the handler's return type."""
     responses: dict[str, Any] = {}
-    if spec.return_type is not None:
-        name = getattr(spec.return_type, "__name__", None)
-        if name:
-            responses["200"] = {
-                "description": "Successful response",
-                "content": {
-                    "application/json": {
-                        "schema": _schema_ref(name),
-                    }
-                },
-            }
-        else:
-            responses["200"] = {"description": "Successful response"}
+    schema = type_schemas.get(id(spec.return_type))
+    if schema is not None:
+        responses["200"] = {
+            "description": "Successful response",
+            "content": {"application/json": {"schema": schema}},
+        }
     else:
         responses["200"] = {"description": "OK"}
 
-    if spec.body_type is not None:
+    if spec.body_type is not None or spec.query_type is not None:
         responses["422"] = {"description": "Validation error"}
 
     return responses
@@ -90,13 +78,30 @@ def build_openapi(
     with msgspec from Query/Body/return annotations.
     """
     excluded = frozenset(exclude_paths)
+    routes = [r for r in router.iter_routes() if r[1] not in excluded]
+
+    # One schema pass over all types: named types become $refs into components,
+    # anonymous ones (dict, list[T], primitives) come back as inline schemas.
+    seen: set[int] = set()
+    unique_types: list[type] = []
+    for _, _, _, spec in routes:
+        for t in (spec.body_type, spec.return_type, spec.query_type):
+            if t is not None and id(t) not in seen:
+                seen.add(id(t))
+                unique_types.append(t)
+
+    type_schemas: dict[int, dict[str, Any]] = {}
+    components: dict[str, Any] = {}
+    if unique_types:
+        schemas, schema_defs = msgspec.json.schema_components(
+            unique_types, ref_template="#/components/schemas/{name}"
+        )
+        type_schemas = {id(t): s for t, s in zip(unique_types, schemas)}
+        if schema_defs:
+            components["schemas"] = schema_defs
+
     paths: dict[str, dict[str, Any]] = {}
-    all_types: list[type] = []
-
-    for method, path, handler, spec in router.iter_routes():
-        if path in excluded:
-            continue
-
+    for method, path, handler, spec in routes:
         operation: dict[str, Any] = {}
 
         doc = handler.__doc__
@@ -106,40 +111,23 @@ def build_openapi(
                 first_line = first_line.split(" — ", 1)[1]
             operation["summary"] = first_line
 
-        params = _build_query_params(spec)
+        params = _build_path_params(path) + _build_query_params(spec)
         if params:
             operation["parameters"] = params
 
         if spec.body_type is not None:
-            type_name = (
-                getattr(spec.body_type, "__name__", None)
-                or spec.body_type.__class__.__name__
-            )
-            operation["requestBody"] = _build_request_body(type_name)
-            all_types.append(spec.body_type)
+            operation["requestBody"] = {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": type_schemas[id(spec.body_type)],
+                    }
+                },
+            }
 
-        operation["responses"] = _build_responses(spec)
-        if spec.return_type is not None:
-            all_types.append(spec.return_type)
-
-        if spec.query_type is not None:
-            all_types.append(spec.query_type)
+        operation["responses"] = _build_responses(spec, type_schemas)
 
         paths.setdefault(path, {})[method.lower()] = operation
-
-    seen: set[int] = set()
-    unique_types: list[type] = []
-    for t in all_types:
-        if id(t) not in seen:
-            seen.add(id(t))
-            unique_types.append(t)
-
-    components: dict[str, Any] = {}
-    if unique_types:
-        _, schemas = msgspec.json.schema_components(
-            unique_types, ref_template="#/components/schemas/{name}"
-        )
-        components["schemas"] = schemas
 
     spec_dict: dict[str, Any] = {
         "openapi": "3.1.0",

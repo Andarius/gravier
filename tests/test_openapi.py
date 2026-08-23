@@ -32,6 +32,14 @@ def make_router() -> Router:
         """Create an item."""
         return ItemOut(name="x", id=1)
 
+    @router.get("/items/{item_id}")
+    async def _get_item(scope, proto, item_id: str) -> ItemOut:
+        return ItemOut(name="x", id=1)
+
+    @router.get("/stream")
+    async def _stream(scope, proto) -> None:
+        return None
+
     @router.get("/openapi.json")
     async def _spec(scope, proto) -> dict:
         return {}
@@ -61,3 +69,35 @@ def test_spec_structure():
     assert create["responses"]["422"] == {"description": "Validation error"}
     schemas = set(spec["components"]["schemas"])
     assert schemas >= {"CreateItem", "ItemOut", "SearchQuery"}
+
+
+def test_anonymous_return_types_are_inlined():
+    spec = json.loads(build_openapi(make_router(), title="T"))
+    # dict return: inline object schema, no dangling #/components/schemas/dict
+    search_200 = spec["paths"]["/search"]["get"]["responses"]["200"]
+    assert search_200["content"]["application/json"]["schema"] == {"type": "object"}
+    assert "dict" not in spec["components"]["schemas"]
+
+
+def test_query_only_route_documents_422():
+    spec = json.loads(build_openapi(make_router(), title="T"))
+    assert spec["paths"]["/search"]["get"]["responses"]["422"] == {
+        "description": "Validation error"
+    }
+
+
+def test_path_params_are_emitted():
+    spec = json.loads(build_openapi(make_router(), title="T"))
+    params = spec["paths"]["/items/{item_id}"]["get"]["parameters"]
+    assert {
+        "name": "item_id",
+        "in": "path",
+        "required": True,
+        "schema": {"type": "string"},
+    } in params
+
+
+def test_none_return_has_no_body_schema():
+    spec = json.loads(build_openapi(make_router(), title="T"))
+    assert spec["paths"]["/stream"]["get"]["responses"]["200"] == {"description": "OK"}
+    assert "NoneType" not in spec["components"]["schemas"]
