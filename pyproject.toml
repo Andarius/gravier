@@ -23,7 +23,7 @@ module-root = ""
 [dependency-groups]
 dev = [
     "niquests>=3.21.0",
-    "pyright>=1.1.400",
+    "pyright>=1.1.414",
     "pytest>=8.0.0",
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=6.0.0",
