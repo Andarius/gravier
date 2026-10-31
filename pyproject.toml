@@ -22,10 +22,10 @@ module-root = ""
 
 [dependency-groups]
 dev = [
-    "niquests>=3.21.0",
+    "niquests>=3.21.2",
     "pyright>=1.1.414",
     "pytest>=8.0.0",
-    "pytest-asyncio>=1.0.0",
+    "pytest-asyncio>=1.4.1",
     "pytest-cov>=6.0.0",
     "ruff>=0.11.0",
 ]
