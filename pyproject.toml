@@ -9,12 +9,12 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "granian>=2.8.7",
+    "granian>=2.8.8",
     "msgspec>=0.22.0",
 ]
 
 [build-system]
-requires = ["uv_build>=0.13.7,<0.13.8"]
+requires = ["uv_build>=0.13.8,<0.13.9"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
@@ -25,7 +25,7 @@ dev = [
     "niquests>=3.21.3",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
-    "pytest-asyncio>=1.4.1.post1",
+    "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.17.4",
 ]
