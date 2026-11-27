@@ -365,7 +365,7 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-bump = [{ name = "commitizen", specifier = ">=4.20.0" }]
+bump = [{ name = "commitizen", specifier = ">=4.20.1" }]
 dev = [
     { name = "niquests", specifier = ">=3.21.3" },
     { name = "pyright", specifier = ">=1.1.414" },
